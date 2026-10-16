@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RabbiX.Sdk/RabbiX.Sdk.csproj" />
+    <Project Path="src/RabbiX.Sdk.AgentFramework/RabbiX.Sdk.AgentFramework.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RabbiX.Sdk.Tests/RabbiX.Sdk.Tests.csproj" />
+    <Project Path="tests/RabbiX.Sdk.AgentFramework.Tests/RabbiX.Sdk.AgentFramework.Tests.csproj" />
+  </Folder>
+</Solution>

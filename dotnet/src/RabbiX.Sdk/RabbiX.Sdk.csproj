@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Submit an autonomous agent's goal and final result to the RabbiX checkpoint and act only on the verdict.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RabbiX.Sdk.Tests" />
+  </ItemGroup>
+</Project>

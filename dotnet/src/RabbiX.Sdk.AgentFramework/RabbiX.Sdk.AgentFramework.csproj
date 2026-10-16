@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>RabbiX checkpoint for Microsoft Agent Framework agents.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <ProjectReference Include="..\RabbiX.Sdk\RabbiX.Sdk.csproj" />
+  </ItemGroup>
+</Project>

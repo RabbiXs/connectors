@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <ProjectReference Include="..\..\src\RabbiX.Sdk.AgentFramework\RabbiX.Sdk.AgentFramework.csproj" />
+    <Compile Include="..\RabbiX.Sdk.Tests\Fakes.cs" Link="Fakes.cs" />
+  </ItemGroup>
+</Project>
