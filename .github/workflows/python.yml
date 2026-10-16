@@ -1,0 +1,31 @@
+name: python
+
+on:
+  push:
+    paths: ['python/**', 'openapi.yaml', '.github/workflows/python.yml']
+  pull_request:
+    paths: ['python/**', 'openapi.yaml', '.github/workflows/python.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pyright
+      - run: uv run pytest

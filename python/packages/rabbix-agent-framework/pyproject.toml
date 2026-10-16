@@ -1,0 +1,15 @@
+[project]
+name = "rabbix-agent-framework"
+version = "0.1.0"
+description = "RabbiX checkpoint for Microsoft Agent Framework."
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["rabbix==0.1.0", "agent-framework-core>=1.22"]
+classifiers = ["Typing :: Typed"]
+
+[project.urls]
+Repository = "https://github.com/RabbiXs/connectors"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"

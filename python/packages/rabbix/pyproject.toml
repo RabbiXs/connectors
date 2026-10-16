@@ -1,0 +1,15 @@
+[project]
+name = "rabbix"
+version = "0.1.0"
+description = "Submit an autonomous agent's goal and final result to the RabbiX checkpoint before acting on it."
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27"]
+classifiers = ["Typing :: Typed"]
+
+[project.urls]
+Repository = "https://github.com/RabbiXs/connectors"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"

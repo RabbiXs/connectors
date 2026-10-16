@@ -1,0 +1,15 @@
+[project]
+name = "rabbix-openai-agents"
+version = "0.1.0"
+description = "RabbiX checkpoint for the OpenAI Agents SDK."
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["rabbix==0.1.0", "openai-agents>=0.24", "pydantic>=2"]
+classifiers = ["Typing :: Typed"]
+
+[project.urls]
+Repository = "https://github.com/RabbiXs/connectors"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
