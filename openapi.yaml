@@ -1,0 +1,168 @@
+openapi: 3.1.0
+info:
+  title: RabbiX Checkpoint API
+  version: 0.1.0
+  summary: The single call an autonomous agent makes at the end of a run.
+  description: |
+    An agent submits its **goal** and its **final result** to the checkpoint
+    before anything acts on the result. RabbiX answers with a verdict.
+
+    This spec is the source of truth for every SDK in this repository.
+    **The API is not live yet.** The server URL below is a placeholder on the
+    reserved `.invalid` TLD and never resolves.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://api.rabbix.invalid
+    description: Placeholder until the real endpoint exists. Override with RABBIX_BASE_URL.
+security:
+  - apiKey: []
+paths:
+  /v1/checkpoints:
+    post:
+      operationId: createCheckpoint
+      summary: Submit a run's goal and final result for a verdict
+      description: |
+        `200` means RabbiX decided synchronously (verdict is final).
+        `202` means a human is reviewing; poll `GET /v1/checkpoints/{decisionId}`.
+
+        Bodies larger than 8 KB SHOULD be sent with `Content-Encoding: gzip`.
+        The uncompressed body MUST NOT exceed 10 MB (10 485 760 bytes).
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: UUID generated once per checkpoint call and reused on every retry of that call.
+          schema: { type: string, format: uuid }
+        - name: Content-Encoding
+          in: header
+          required: false
+          schema: { type: string, enum: [gzip] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckpointRequest' }
+      responses:
+        '200':
+          description: Final verdict, decided synchronously.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Verdict' }
+        '202':
+          description: Pending human review. Poll the decision.
+          headers:
+            Retry-After: { $ref: '#/components/headers/RetryAfter' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Verdict' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Retryable' }
+        '5XX': { $ref: '#/components/responses/Retryable' }
+  /v1/checkpoints/{decisionId}:
+    get:
+      operationId: getCheckpoint
+      summary: Get the current verdict of a decision
+      description: 'Returns `status: PENDING` until the decision is final.'
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current verdict.
+          headers:
+            Retry-After: { $ref: '#/components/headers/RetryAfter' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Verdict' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Retryable' }
+        '5XX': { $ref: '#/components/responses/Retryable' }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: 'API key sent as `Authorization: Bearer <key>`.'
+  headers:
+    RetryAfter:
+      description: Seconds the client should wait before the next request.
+      schema: { type: integer, minimum: 0 }
+  responses:
+    Error:
+      description: Non-retryable error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Retryable:
+      description: Retryable error. Retry with the same Idempotency-Key.
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    CheckpointRequest:
+      type: object
+      required: [goal, result]
+      additionalProperties: false
+      properties:
+        goal:
+          type: string
+          minLength: 1
+          description: What the agent was asked to do (instructions and task input).
+        result:
+          description: The agent's final result, in full. Never truncated by the SDK.
+          oneOf:
+            - type: string
+            - type: object
+            - type: array
+        decisionClass:
+          type: string
+          description: Category with shared rules and thresholds, e.g. `refund`, `price-change`.
+        agent:
+          $ref: '#/components/schemas/AgentInfo'
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+          description: Free-form string pairs supplied by the integrator. The SDK adds nothing here.
+    AgentInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        framework:
+          type: [string, 'null']
+          enum: [openai-agents, agent-framework, claude-agent-sdk, null]
+    Verdict:
+      type: object
+      required: [decisionId, status]
+      properties:
+        decisionId: { type: string }
+        status:
+          type: string
+          enum: [APPROVED, REJECTED, MODIFIED, EXPIRED, PENDING]
+          description: |
+            APPROVED / MODIFIED: the host may act (on `result` if MODIFIED).
+            REJECTED / EXPIRED: the host must not act.
+            PENDING: not final; keep polling.
+        route:
+          type: string
+          enum: [AI_AUTONOMOUS, HUMAN_IN_LOOP, HUMAN_ONLY]
+        result:
+          description: Present when status is MODIFIED; the edited result to act on instead.
+        reason:
+          type: [string, 'null']
+          description: Human- or policy-supplied explanation.
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
