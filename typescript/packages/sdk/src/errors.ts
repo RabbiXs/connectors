@@ -43,15 +43,29 @@ export class PayloadTooLarge extends RabbiXError {
 /**
  * The API answered with a non-retryable error, retries were exhausted, or the
  * response was unusable. `status` is 0 when no HTTP response was received.
+ * `decisionId` is set when the error happened while polling a pending decision:
+ * resume with `client.wait(decisionId)` instead of resubmitting.
  */
 export class ApiError extends RabbiXError {
   override name = "ApiError";
   readonly status: number;
   readonly code: string;
+  readonly decisionId: string | undefined;
 
-  constructor(status: number, code: string, message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    options?: ErrorOptions & { decisionId?: string },
+  ) {
+    super(
+      options?.decisionId === undefined
+        ? message
+        : `${message} (decision ${options.decisionId}; resume with wait(decisionId))`,
+      options,
+    );
     this.status = status;
     this.code = code;
+    this.decisionId = options?.decisionId;
   }
 }

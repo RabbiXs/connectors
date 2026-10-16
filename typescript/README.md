@@ -41,47 +41,58 @@ To branch on the verdict yourself, `checkpointVerdict()` returns the `Verdict` (
 
 ## Framework wrappers
 
-Each wrapper runs the agent, sends its instructions + input as `goal` and its final output as `result`, and returns the output to act on. They always throw unless the verdict is `APPROVED` or `MODIFIED`.
+Each wrapper mirrors the framework call it wraps, with the client and checkpoint options added. It runs the agent, sends its instructions + input as `goal` and its final output as `result`, and returns the output to act on. It always throws unless the verdict is `APPROVED` or `MODIFIED`.
 
 ```ts
 import { Agent } from "@openai/agents";
 import { runWithCheckpoint } from "@rabbix/openai-agents";
 
 const agent = new Agent({ name: "refunds", instructions: "Decide refunds for damaged orders." });
-const output = await runWithCheckpoint(rabbix, agent, "Order 42: screen cracked.", {
+const output = await runWithCheckpoint(agent, "Order 42: screen cracked.", {
+  client: rabbix,
   decisionClass: "refund",
+  // metadata, runOptions (passed through to run())
 });
 ```
 
 ```ts
 import { queryWithCheckpoint } from "@rabbix/claude-agent-sdk";
 
-const output = await queryWithCheckpoint(rabbix, {
+const output = await queryWithCheckpoint({
   prompt: "Order 42: screen cracked.",
-  options: { systemPrompt: "Decide refunds for damaged orders." },
-  name: "refunds",
+  options: { systemPrompt: "Decide refunds for damaged orders." }, // passed through to query()
+  client: rabbix,
+  agentName: "refunds", // defaults to options.agent
   decisionClass: "refund",
 });
 ```
+
+`goal` is the non-empty parts below joined with `"\n\n"`, verbatim:
+
+1. Instructions. OpenAI Agents: the agent's instructions (function instructions are resolved with `runOptions.context`). Claude Agent SDK: `systemPrompt` (a string, the text parts of an array, or a custom `prompt`; for a preset only its `append`), then the prompt of the subagent selected by `options.agent`.
+2. The input: a string as-is; OpenAI Agents input items as compact `JSON.stringify(items)`.
+
+If the goal is empty, the wrapper throws `RabbiXError` before running the agent or sending anything.
 
 ## Errors
 
 All errors extend `RabbiXError`.
 
-| Error                | When                                                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `CheckpointRejected` | Verdict is `REJECTED`, `EXPIRED` or unknown. `error.verdict` has the details.                                     |
-| `CheckpointTimeout`  | Still pending after `waitTimeoutMs`. Resume with `rabbix.wait(error.decisionId)`.                                 |
-| `PayloadTooLarge`    | Body over 10 MB uncompressed. Nothing was sent.                                                                   |
-| `ApiError`           | Non-retryable 4xx, retries exhausted, or an unusable response. Has `status` (0 = no response), `code`, `message`. |
+| Error                | When                                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CheckpointRejected` | Verdict is `REJECTED`, `EXPIRED` or unknown. `error.verdict` has the details.                                                                                                                                                          |
+| `CheckpointTimeout`  | Still pending after `waitTimeoutMs`. Resume with `rabbix.wait(error.decisionId)`.                                                                                                                                                      |
+| `PayloadTooLarge`    | Body over 10 MB uncompressed. Nothing was sent.                                                                                                                                                                                        |
+| `ApiError`           | Non-retryable 4xx, retries exhausted, or an unusable response. Has `status` (0 = no response), `code`, `message`, and `decisionId` when it failed while polling (resume with `rabbix.wait(error.decisionId)` instead of resubmitting). |
 
 ```ts
-import { CheckpointRejected, CheckpointTimeout } from "@rabbix/sdk";
+import { ApiError, CheckpointRejected, CheckpointTimeout } from "@rabbix/sdk";
 
 try {
   await act(await rabbix.checkpoint({ goal, result }));
 } catch (error) {
   if (error instanceof CheckpointTimeout) await saveForLater(error.decisionId);
+  else if (error instanceof ApiError && error.decisionId) await saveForLater(error.decisionId);
   else if (error instanceof CheckpointRejected) console.warn(error.verdict.reason);
   else throw error;
 }

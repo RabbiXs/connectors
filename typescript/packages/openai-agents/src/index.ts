@@ -9,6 +9,7 @@ import {
 import { RabbiXError, type RabbiX } from "@rabbix/sdk";
 
 export interface RunWithCheckpointOptions<TContext, TAgent extends Agent<any, any>> {
+  client: RabbiX;
   decisionClass?: string;
   metadata?: Record<string, string>;
   /** Passed through to `run()`. */
@@ -25,21 +26,23 @@ type FinalOutput<TAgent extends Agent<any, any>> = NonNullable<
  * Throws `CheckpointRejected` (or another RabbiX error) unless approved.
  */
 export async function runWithCheckpoint<TAgent extends Agent<any, any>, TContext = undefined>(
-  client: RabbiX,
   agent: TAgent,
   input: string | AgentInputItem[],
-  options: RunWithCheckpointOptions<TContext, TAgent> = {},
+  options: RunWithCheckpointOptions<TContext, TAgent>,
 ): Promise<FinalOutput<TAgent>> {
-  const result = await run(agent, input, options.runOptions);
+  const { client, runOptions } = options;
+  // Resolves function-style instructions the same way the SDK does. Checked
+  // before running so an agent whose run can never be approved is not started.
+  const instructions = await agent.getSystemPrompt(new RunContext(runOptions?.context));
+  const task = typeof input === "string" ? input : JSON.stringify(input);
+  const goal = [instructions ?? "", task].filter((part) => part !== "").join("\n\n");
+  if (!goal) throw new RabbiXError("Cannot checkpoint: the goal (instructions + input) is empty");
+
+  const result = await run(agent, input, runOptions);
   const output = result.finalOutput as FinalOutput<TAgent> | undefined;
   if (output === undefined || output === null) {
     throw new RabbiXError(`Agent "${agent.name}" finished without a final output`);
   }
-
-  // Resolves function-style instructions the same way the SDK does.
-  const instructions = await agent.getSystemPrompt(new RunContext(options.runOptions?.context));
-  const task = typeof input === "string" ? input : JSON.stringify(input);
-  const goal = instructions ? `${instructions}\n\n${task}` : task;
 
   return client.checkpoint({
     goal,

@@ -100,8 +100,19 @@ export class RabbiX {
       if (remaining <= 0) throw new CheckpointTimeout(decisionId);
       await sleep(Math.min(delay, remaining), signal);
 
-      const res = await this.#request(`/v1/checkpoints/${encodeURIComponent(decisionId)}`, signal);
-      const verdict = parseVerdict(res.json);
+      let res: ApiResponse;
+      let verdict: Verdict;
+      try {
+        res = await this.#request(`/v1/checkpoints/${encodeURIComponent(decisionId)}`, signal);
+        verdict = parseVerdict(res.json);
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        // Re-thrown with the decisionId so the host can resume instead of resubmitting.
+        throw new ApiError(error.status, error.code, error.message, {
+          cause: error.cause,
+          decisionId,
+        });
+      }
       if (verdict.status !== "PENDING") return verdict;
       if (res.retryAfterMs !== undefined) {
         delay = res.retryAfterMs;

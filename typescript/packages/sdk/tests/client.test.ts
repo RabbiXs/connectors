@@ -159,6 +159,67 @@ describe("polling", () => {
   });
 });
 
+describe("polling errors carry the decisionId", () => {
+  const accepted: Reply = {
+    status: 202,
+    body: { decisionId: "dec_42", status: "PENDING" },
+    headers: { "retry-after": "0" },
+  };
+  const failure = async (promise: Promise<unknown>) => {
+    const error = await promise.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    return error as ApiError;
+  };
+
+  test("network failures exhausted while polling", async () => {
+    const drop = { status: 0, drop: true };
+    const { client } = await setup([accepted, drop, drop], { maxRetries: 1 });
+    const error = await failure(client.checkpoint(input));
+    expect(error).toMatchObject({ status: 0, code: "network_error", decisionId: "dec_42" });
+    expect(error.message).toContain("dec_42");
+  });
+
+  test("5xx exhausted while polling", async () => {
+    const busy = {
+      status: 500,
+      body: { code: "internal", message: "boom" },
+      headers: { "retry-after": "0" },
+    };
+    const { client } = await setup([accepted, busy, busy], { maxRetries: 1 });
+    const error = await failure(client.checkpointVerdict(input));
+    expect(error).toMatchObject({ status: 500, code: "internal", decisionId: "dec_42" });
+    expect(error.message).toContain("dec_42");
+  });
+
+  test("404 while polling", async () => {
+    const { client } = await setup([
+      accepted,
+      { status: 404, body: { code: "not_found", message: "unknown decision" } },
+    ]);
+    const error = await failure(client.checkpoint(input));
+    expect(error).toMatchObject({ status: 404, code: "not_found", decisionId: "dec_42" });
+  });
+
+  test("404 in wait", async () => {
+    const { client } = await setup([{ status: 404, body: { code: "not_found", message: "gone" } }]);
+    const error = await failure(client.wait("dec_9"));
+    expect(error).toMatchObject({ status: 404, decisionId: "dec_9" });
+    expect(error.message).toContain("dec_9");
+  });
+
+  test("errors from the initial POST have no decisionId", async () => {
+    const busy = {
+      status: 503,
+      body: { code: "unavailable", message: "busy" },
+      headers: { "retry-after": "0" },
+    };
+    const { client } = await setup([busy, busy], { maxRetries: 1 });
+    const error = await failure(client.checkpoint(input));
+    expect(error).toMatchObject({ status: 503, message: "busy" });
+    expect(error.decisionId).toBeUndefined();
+  });
+});
+
 describe("retries", () => {
   test("503 then 200 retries with the same Idempotency-Key", async () => {
     const { client, requests } = await setup([

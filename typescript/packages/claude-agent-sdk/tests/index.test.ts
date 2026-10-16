@@ -1,9 +1,12 @@
-import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { CheckpointRejected, RabbiXError, type RabbiX } from "@rabbix/sdk";
 import { beforeEach, expect, test, vi } from "vite-plus/test";
 import { queryWithCheckpoint } from "../src/index.ts";
 
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: vi.fn() }));
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: vi.fn(),
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY: "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__",
+}));
 
 const queryMock = vi.mocked(query);
 const checkpoint = vi.fn();
@@ -16,10 +19,12 @@ function respondWith(...messages: Partial<SDKMessage>[]) {
 }
 
 const success = { type: "result", subtype: "success", is_error: false, result: "Refund 10 EUR" };
+const sentGoal = () => checkpoint.mock.calls[0]![0].goal as string;
 
 beforeEach(() => {
   vi.clearAllMocks();
   checkpoint.mockImplementation(async ({ result }) => result);
+  respondWith(success as never);
 });
 
 test("checkpoints system prompt + prompt and the final result", async () => {
@@ -27,10 +32,11 @@ test("checkpoints system prompt + prompt and the final result", async () => {
   const options = { systemPrompt: "Decide refunds." };
 
   await expect(
-    queryWithCheckpoint(client, {
+    queryWithCheckpoint({
       prompt: "Order 42 arrived broken",
       options,
-      name: "refunds",
+      client,
+      agentName: "refunds",
       decisionClass: "refund",
       metadata: { tenant: "t1" },
     }),
@@ -46,34 +52,70 @@ test("checkpoints system prompt + prompt and the final result", async () => {
   });
 });
 
-test("uses structured output, preset append and the selected agent", async () => {
+const support = {
+  agent: "support",
+  agents: { support: { description: "Support agent", prompt: "Handle refunds." } },
+};
+
+test.each<[string, Options | undefined, string]>([
+  ["system prompt", { systemPrompt: "Be careful." }, "Be careful.\n\nRefund order 7"],
+  ["no system prompt", undefined, "Refund order 7"],
+  [
+    "system prompt + selected subagent",
+    { systemPrompt: "Be careful.", ...support },
+    "Be careful.\n\nHandle refunds.\n\nRefund order 7",
+  ],
+  [
+    "array system prompt without the cache boundary",
+    { systemPrompt: ["Be careful.", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "Session A."] },
+    "Be careful.\n\nSession A.\n\nRefund order 7",
+  ],
+  [
+    "custom prompt",
+    { systemPrompt: { type: "custom", prompt: "Be careful." } },
+    "Be careful.\n\nRefund order 7",
+  ],
+  [
+    "preset uses only its append",
+    { systemPrompt: { type: "preset", preset: "claude_code", append: "Be careful." }, ...support },
+    "Be careful.\n\nHandle refunds.\n\nRefund order 7",
+  ],
+  [
+    "preset without append",
+    { systemPrompt: { type: "preset", preset: "claude_code" } },
+    "Refund order 7",
+  ],
+])("goal: %s", async (_, options, goal) => {
+  await queryWithCheckpoint({ prompt: "Refund order 7", options, client });
+  expect(sentGoal()).toBe(goal);
+});
+
+test("empty system prompt and empty prompt throw before anything runs or is sent", async () => {
+  await expect(
+    queryWithCheckpoint({ prompt: "", options: { systemPrompt: "" }, client }),
+  ).rejects.toBeInstanceOf(RabbiXError);
+  expect(queryMock).not.toHaveBeenCalled();
+  expect(checkpoint).not.toHaveBeenCalled();
+});
+
+test("uses structured output and defaults agentName to options.agent", async () => {
   respondWith({ ...success, structured_output: { refund: 10 } } as never);
-  await queryWithCheckpoint(client, {
-    prompt: "Order 42",
-    options: {
-      systemPrompt: { type: "preset", preset: "claude_code", append: "Be strict." },
-      agent: "refunds",
-      agents: { refunds: { description: "Refund agent", prompt: "Decide refunds." } },
-    },
-  });
+  await queryWithCheckpoint({ prompt: "Order 42", options: support, client });
   expect(checkpoint.mock.calls[0]![0]).toMatchObject({
-    goal: "Be strict.\n\nDecide refunds.\n\nOrder 42",
     result: { refund: 10 },
-    agent: { name: "refunds", framework: "claude-agent-sdk" },
+    agent: { name: "support", framework: "claude-agent-sdk" },
   });
 });
 
 test("returns the modified result", async () => {
-  respondWith(success as never);
   checkpoint.mockResolvedValue("Refund 5 EUR");
-  await expect(queryWithCheckpoint(client, { prompt: "x" })).resolves.toBe("Refund 5 EUR");
+  await expect(queryWithCheckpoint({ prompt: "x", client })).resolves.toBe("Refund 5 EUR");
 });
 
 test("propagates a rejection", async () => {
-  respondWith(success as never);
   const rejected = new CheckpointRejected({ decisionId: "d1", status: "REJECTED" });
   checkpoint.mockRejectedValue(rejected);
-  await expect(queryWithCheckpoint(client, { prompt: "x" })).rejects.toBe(rejected);
+  await expect(queryWithCheckpoint({ prompt: "x", client })).rejects.toBe(rejected);
 });
 
 test.each([
@@ -81,6 +123,6 @@ test.each([
   ["an error result", [{ type: "result", subtype: "error_max_turns", is_error: true }]],
 ])("throws without checkpointing on %s", async (_, messages) => {
   respondWith(...(messages as never[]));
-  await expect(queryWithCheckpoint(client, { prompt: "x" })).rejects.toBeInstanceOf(RabbiXError);
+  await expect(queryWithCheckpoint({ prompt: "x", client })).rejects.toBeInstanceOf(RabbiXError);
   expect(checkpoint).not.toHaveBeenCalled();
 });
