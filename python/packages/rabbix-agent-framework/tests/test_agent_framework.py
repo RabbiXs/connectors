@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 from agent_framework import Agent, AgentResponse, ChatResponse, Message
 from rabbix import AgentInfo, AsyncRabbiX, CheckpointRejected, RabbiXError, Verdict
-from rabbix_agent_framework import RabbiXMiddleware, run
+from rabbix_agent_framework import RabbiXCheckpointMiddleware, run_with_checkpoint
 
 
 class FakeRabbiX:
@@ -39,13 +39,13 @@ class FakeChatClient:
         return respond()
 
 
-def make_agent(**kwargs: Any) -> Agent:
-    return Agent(client=FakeChatClient(), instructions="Handle refunds.", name="support", **kwargs)
+def make_agent(instructions: str | None = "Handle refunds.", **kwargs: Any) -> Agent:
+    return Agent(client=FakeChatClient(), instructions=instructions, name="support", **kwargs)
 
 
 async def test_middleware_passes_approved_response_through() -> None:
     rabbix = FakeRabbiX()
-    agent = make_agent(middleware=[RabbiXMiddleware(cast(AsyncRabbiX, rabbix))])
+    agent = make_agent(middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, rabbix))])
 
     response = await agent.run("Customer wants a refund for order 7")
 
@@ -63,7 +63,7 @@ async def test_middleware_passes_approved_response_through() -> None:
 
 async def test_middleware_replaces_response_on_modified() -> None:
     rabbix = FakeRabbiX("MODIFIED", edited="Refund 40 EUR")
-    agent = make_agent(middleware=[RabbiXMiddleware(cast(AsyncRabbiX, rabbix))])
+    agent = make_agent(middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, rabbix))])
 
     response = await agent.run("refund order 7")
 
@@ -72,7 +72,7 @@ async def test_middleware_replaces_response_on_modified() -> None:
 
 async def test_middleware_rejection_propagates_out_of_the_run() -> None:
     rabbix = FakeRabbiX("REJECTED")
-    agent = make_agent(middleware=[RabbiXMiddleware(cast(AsyncRabbiX, rabbix))])
+    agent = make_agent(middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, rabbix))])
 
     with pytest.raises(CheckpointRejected):
         await agent.run("refund order 7")
@@ -80,7 +80,7 @@ async def test_middleware_rejection_propagates_out_of_the_run() -> None:
 
 async def test_middleware_refuses_streaming() -> None:
     rabbix = FakeRabbiX()
-    agent = make_agent(middleware=[RabbiXMiddleware(cast(AsyncRabbiX, rabbix))])
+    agent = make_agent(middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, rabbix))])
 
     with pytest.raises(RabbiXError, match="streaming"):
         await agent.run("refund order 7", stream=True).get_final_response()
@@ -91,7 +91,7 @@ async def test_middleware_refuses_streaming() -> None:
 async def test_run_helper_checkpoints_and_returns_response() -> None:
     rabbix = FakeRabbiX()
 
-    response = await run(
+    response = await run_with_checkpoint(
         make_agent(),
         "refund order 7",
         client=cast(AsyncRabbiX, rabbix),
@@ -109,7 +109,7 @@ async def test_run_helper_checkpoints_and_returns_response() -> None:
 async def test_run_helper_serialises_structured_edits() -> None:
     rabbix = FakeRabbiX("MODIFIED", edited={"amount": 40})
 
-    response = await run(make_agent(), "refund", client=cast(AsyncRabbiX, rabbix))
+    response = await run_with_checkpoint(make_agent(), "refund", client=cast(AsyncRabbiX, rabbix))
 
     assert response.text == '{"amount": 40}'
 
@@ -117,4 +117,43 @@ async def test_run_helper_serialises_structured_edits() -> None:
 @pytest.mark.parametrize("status", ["REJECTED", "EXPIRED", "UNKNOWN"])
 async def test_run_helper_raises_on_non_approval(status: str) -> None:
     with pytest.raises(CheckpointRejected):
-        await run(make_agent(), "refund", client=cast(AsyncRabbiX, FakeRabbiX(status)))
+        await run_with_checkpoint(
+            make_agent(), "refund", client=cast(AsyncRabbiX, FakeRabbiX(status))
+        )
+
+
+@pytest.mark.parametrize(
+    ("instructions", "messages", "goal"),
+    [
+        ("Be careful.", "Refund order 7", "Be careful.\n\nRefund order 7"),
+        (None, "Refund order 7", "Refund order 7"),
+        ("Be careful.", ["Hi", "Refund order 7"], "Be careful.\n\nHi\n\nRefund order 7"),
+        ("Be careful.", ["Hi", "", "Refund order 7"], "Be careful.\n\nHi\n\nRefund order 7"),
+        ("  Be careful.  ", [" Hi "], "  Be careful.  \n\n Hi "),  # verbatim, no trimming
+    ],
+    ids=["instructions+string", "string-only", "messages", "skips-empty", "verbatim"],
+)
+async def test_goal_vectors(instructions: str | None, messages: Any, goal: str) -> None:
+    rabbix = FakeRabbiX()
+
+    await run_with_checkpoint(make_agent(instructions), messages, client=cast(AsyncRabbiX, rabbix))
+    middleware_rabbix = FakeRabbiX()
+    agent = make_agent(
+        instructions, middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, middleware_rabbix))]
+    )
+    await agent.run(messages)
+
+    assert rabbix.calls[0]["goal"] == goal
+    assert middleware_rabbix.calls[0]["goal"] == goal
+
+
+async def test_empty_goal_raises_without_checkpointing() -> None:
+    rabbix = FakeRabbiX()
+    agent = make_agent("", middleware=[RabbiXCheckpointMiddleware(cast(AsyncRabbiX, rabbix))])
+
+    with pytest.raises(RabbiXError, match="goal is empty"):
+        await run_with_checkpoint(make_agent(""), "", client=cast(AsyncRabbiX, rabbix))
+    with pytest.raises(RabbiXError, match="goal is empty"):
+        await agent.run("")
+
+    assert rabbix.calls == []

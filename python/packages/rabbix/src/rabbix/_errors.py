@@ -37,11 +37,20 @@ class ApiError(RabbiXError):
     """A non-retryable HTTP error, or retries were exhausted.
 
     ``status`` is None when the request never got an HTTP response (network failure).
+    ``decision_id`` is set when the error happened while polling a known decision; resume
+    with ``wait(decision_id)``. It is None for errors from the initial submission.
     """
 
-    def __init__(self, status: int | None, code: str | None, message: str) -> None:
-        where = f"HTTP {status}" if status is not None else "network error"
-        super().__init__(f"{where} ({code}): {message}" if code else f"{where}: {message}")
+    def __init__(
+        self, status: int | None, code: str | None, message: str, decision_id: str | None = None
+    ) -> None:
+        super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.decision_id = decision_id
+
+    def __str__(self) -> str:
+        where = f"HTTP {self.status}" if self.status is not None else "network error"
+        text = f"{where} ({self.code}): {self.message}" if self.code else f"{where}: {self.message}"
+        return f"checkpoint {self.decision_id}: {text}" if self.decision_id else text

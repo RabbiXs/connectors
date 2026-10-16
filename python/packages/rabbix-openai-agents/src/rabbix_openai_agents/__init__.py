@@ -8,14 +8,14 @@ from typing import Any
 
 from agents import Agent, Runner, TResponseInputItem
 from pydantic_core import to_jsonable_python
-from rabbix import AgentInfo, AsyncRabbiX
+from rabbix import AgentInfo, AsyncRabbiX, RabbiXError
 
-__all__ = ["run"]
+__all__ = ["run_with_checkpoint"]
 
 FRAMEWORK = "openai-agents"
 
 
-async def run(
+async def run_with_checkpoint(
     agent: Agent[Any],
     input: str | list[TResponseInputItem],
     *,
@@ -26,15 +26,15 @@ async def run(
 ) -> Any:
     """Run ``agent`` with ``Runner.run`` and checkpoint its final output.
 
-    The goal is the agent's instructions plus ``input``; the result is ``final_output``.
-    Returns the output to act on: the original ``final_output`` on APPROVED, the edited JSON
-    value on MODIFIED. Raises ``rabbix.CheckpointRejected`` on anything else.
-    ``run_kwargs`` are passed to ``Runner.run`` unchanged.
+    The goal is the agent's instructions and ``input`` (input items as compact JSON), joined
+    with a blank line; the result is ``final_output``. Returns the output to act on: the
+    original ``final_output`` on APPROVED, the edited JSON value on MODIFIED. Raises
+    ``rabbix.CheckpointRejected`` on anything else, and ``rabbix.RabbiXError`` if the goal is
+    empty. ``run_kwargs`` are passed to ``Runner.run`` unchanged.
     """
     run_result = await Runner.run(agent, input, **run_kwargs)
     instructions = await agent.get_system_prompt(run_result.context_wrapper)
-    task = input if isinstance(input, str) else json.dumps(input, ensure_ascii=False, default=str)
-    goal = "\n\n".join(part for part in (instructions, task) if part)
+    goal = _goal(instructions, input)
 
     output = run_result.final_output
     payload = to_jsonable_python(output)  # structured outputs (pydantic, dataclass) to JSON
@@ -47,3 +47,17 @@ async def run(
     )
     # checkpoint() hands back the very object it was given when APPROVED.
     return output if approved is payload else approved
+
+
+def _goal(instructions: str | None, input: str | list[TResponseInputItem]) -> str:
+    if isinstance(input, str):
+        task = input
+    elif input:
+        items = to_jsonable_python(input)
+        task = json.dumps(items, separators=(",", ":"), ensure_ascii=False)
+    else:
+        task = ""  # no input items: nothing to describe
+    goal = "\n\n".join(part for part in (instructions, task) if part)
+    if not goal:
+        raise RabbiXError("goal is empty: the agent has no instructions and the input is empty")
+    return goal

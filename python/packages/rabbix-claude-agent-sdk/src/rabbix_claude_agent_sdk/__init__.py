@@ -8,12 +8,12 @@ from typing import Any, cast
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from rabbix import AgentInfo, AsyncRabbiX, RabbiXError
 
-__all__ = ["run"]
+__all__ = ["query_with_checkpoint"]
 
 FRAMEWORK = "claude-agent-sdk"
 
 
-async def run(
+async def query_with_checkpoint(
     prompt: str,
     *,
     client: AsyncRabbiX,
@@ -24,12 +24,16 @@ async def run(
 ) -> Any:
     """Run ``query(prompt=..., options=...)`` to completion and checkpoint its final result.
 
-    The goal is the configured system prompt plus ``prompt``; the result is the
-    ``ResultMessage``'s ``structured_output`` if set, else its ``result`` text.
-    Returns the result to act on (the edited one on MODIFIED). Raises
-    ``rabbix.CheckpointRejected`` on anything but approval, and ``rabbix.RabbiXError`` if the
-    run ends without a successful result.
+    The goal is the configured system prompt (a preset's ``append`` only) and ``prompt``,
+    joined with a blank line; the result is the ``ResultMessage``'s ``structured_output`` if
+    set, else its ``result`` text. Returns the result to act on (the edited one on MODIFIED).
+    Raises ``rabbix.CheckpointRejected`` on anything but approval, and ``rabbix.RabbiXError``
+    if the goal is empty (before running) or the run ends without a successful result.
     """
+    goal = "\n\n".join(part for part in (_instructions(options), prompt) if part)
+    if not goal:
+        raise RabbiXError("goal is empty: no system prompt and the prompt is empty")
+
     final: ResultMessage | None = None
     async for message in query(prompt=prompt, options=options):
         if isinstance(message, ResultMessage):
@@ -41,9 +45,8 @@ async def run(
     if output is None:
         raise RabbiXError("Claude agent run produced no result; nothing to checkpoint")
 
-    instructions = _instructions(options)
     return await client.checkpoint(
-        "\n\n".join(part for part in (instructions, prompt) if part),
+        goal,
         output,
         decision_class=decision_class,
         agent=AgentInfo(name=agent_name, framework=FRAMEWORK),
@@ -55,8 +58,9 @@ def _instructions(options: ClaudeAgentOptions | None) -> str | None:
     system_prompt = options.system_prompt if options else None
     if system_prompt is None or isinstance(system_prompt, str):
         return system_prompt
-    # {"type": "custom", "prompt": ...} or {"type": "preset", "append": ...}; a "file" prompt
-    # is not read, only its text would describe the goal.
     config = cast(Mapping[str, Any], system_prompt)
-    text = config.get("prompt") or config.get("append")
+    # A custom prompt's text, or what a preset appends (the preset itself is not the goal).
+    # A "file" prompt is not read.
+    key = {"custom": "prompt", "preset": "append"}.get(config.get("type", ""))
+    text = config.get(key) if key else None
     return text if isinstance(text, str) else None

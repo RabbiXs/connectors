@@ -7,7 +7,7 @@ import pytest
 import rabbix_claude_agent_sdk
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock
 from rabbix import AgentInfo, AsyncRabbiX, CheckpointRejected, RabbiXError, Verdict
-from rabbix_claude_agent_sdk import run
+from rabbix_claude_agent_sdk import query_with_checkpoint
 
 
 class FakeRabbiX:
@@ -59,7 +59,7 @@ async def test_approved_result_text(messages: list[Any]) -> None:
     messages.append(result_message())
     rabbix = FakeRabbiX()
 
-    result = await run(
+    result = await query_with_checkpoint(
         "refund order 7",
         client=cast(AsyncRabbiX, rabbix),
         options=ClaudeAgentOptions(system_prompt="Handle refunds."),
@@ -86,7 +86,9 @@ async def test_structured_output_and_preset_append(messages: list[Any]) -> None:
         system_prompt={"type": "preset", "preset": "claude_code", "append": "Handle refunds."}
     )
 
-    result = await run("refund", client=cast(AsyncRabbiX, rabbix), options=options)
+    result = await query_with_checkpoint(
+        "refund", client=cast(AsyncRabbiX, rabbix), options=options
+    )
 
     assert result == {"amount": 42}
     assert rabbix.calls[0]["goal"] == "Handle refunds.\n\nrefund"
@@ -95,7 +97,9 @@ async def test_structured_output_and_preset_append(messages: list[Any]) -> None:
 async def test_modified_returns_edited(messages: list[Any]) -> None:
     messages.append(result_message())
 
-    result = await run("refund", client=cast(AsyncRabbiX, FakeRabbiX("MODIFIED", "40 EUR")))
+    result = await query_with_checkpoint(
+        "refund", client=cast(AsyncRabbiX, FakeRabbiX("MODIFIED", "40 EUR"))
+    )
 
     assert result == "40 EUR"
 
@@ -105,7 +109,7 @@ async def test_non_approval_raises(messages: list[Any], status: str) -> None:
     messages.append(result_message())
 
     with pytest.raises(CheckpointRejected):
-        await run("refund", client=cast(AsyncRabbiX, FakeRabbiX(status)))
+        await query_with_checkpoint("refund", client=cast(AsyncRabbiX, FakeRabbiX(status)))
 
 
 @pytest.mark.parametrize(
@@ -119,6 +123,50 @@ async def test_failed_run_raises_without_checkpoint(
     rabbix = FakeRabbiX()
 
     with pytest.raises(RabbiXError):
-        await run("refund", client=cast(AsyncRabbiX, rabbix))
+        await query_with_checkpoint("refund", client=cast(AsyncRabbiX, rabbix))
+
+    assert rabbix.calls == []
+
+
+@pytest.mark.parametrize(
+    ("system_prompt", "prompt", "goal"),
+    [
+        ("Be careful.", "Refund order 7", "Be careful.\n\nRefund order 7"),
+        (None, "Refund order 7", "Refund order 7"),
+        (
+            {"type": "custom", "prompt": "Be careful."},
+            "Refund order 7",
+            "Be careful.\n\nRefund order 7",
+        ),
+        ({"type": "preset", "preset": "claude_code"}, "Refund order 7", "Refund order 7"),
+        ({"type": "file", "path": "p.md"}, "Refund order 7", "Refund order 7"),
+        ("  Be careful.  ", " x ", "  Be careful.  \n\n x "),  # verbatim, no trimming
+    ],
+    ids=["system-prompt", "prompt-only", "custom", "preset-without-append", "file", "verbatim"],
+)
+async def test_goal_vectors(
+    messages: list[Any], system_prompt: Any, prompt: str, goal: str
+) -> None:
+    messages.append(result_message())
+    rabbix = FakeRabbiX()
+
+    await query_with_checkpoint(
+        prompt,
+        client=cast(AsyncRabbiX, rabbix),
+        options=ClaudeAgentOptions(system_prompt=system_prompt),
+    )
+
+    assert rabbix.calls[0]["goal"] == goal
+
+
+@pytest.mark.parametrize("options", [None, ClaudeAgentOptions(system_prompt="")])
+async def test_empty_goal_raises_before_running(
+    messages: list[Any], options: ClaudeAgentOptions | None
+) -> None:
+    messages.append(result_message())
+    rabbix = FakeRabbiX()
+
+    with pytest.raises(RabbiXError, match="goal is empty"):
+        await query_with_checkpoint("", client=cast(AsyncRabbiX, rabbix), options=options)
 
     assert rabbix.calls == []

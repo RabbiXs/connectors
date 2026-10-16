@@ -245,8 +245,58 @@ def test_network_errors_are_exhausted(
         make_client().checkpoint("g", "r")
 
     assert info.value.status is None
+    assert info.value.decision_id is None  # the POST failed: no decision exists yet
     assert len(server.requests) == 4
     assert len(clock.sleeps) == 3
+
+
+def test_post_error_has_no_decision_id(make_client: ClientFactory, server: MockServer) -> None:
+    server.reply(Reply(500, {"code": "internal", "message": "boom"}))
+
+    with pytest.raises(ApiError) as info:
+        make_client().checkpoint("g", "r")
+
+    assert info.value.decision_id is None
+    assert "dec_" not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("poll_reply", "status"),
+    [
+        (Reply(0, drop=True), None),
+        (Reply(500, {"code": "internal", "message": "boom"}), 500),
+        (Reply(404, {"code": "not_found", "message": "gone"}), 404),
+    ],
+    ids=["network", "5xx", "404"],
+)
+def test_polling_error_carries_decision_id(
+    make_client: ClientFactory, server: MockServer, poll_reply: Reply, status: int | None
+) -> None:
+    server.reply(Reply(202, verdict("PENDING")), poll_reply)
+
+    with pytest.raises(ApiError) as info:
+        make_client().checkpoint("g", "r")
+
+    assert info.value.status == status
+    assert info.value.decision_id == "dec_1"
+    assert str(info.value).startswith("checkpoint dec_1: ")
+
+
+@pytest.mark.parametrize(
+    "poll_reply",
+    [Reply(0, drop=True), Reply(500, {"code": "internal", "message": "boom"}), Reply(404)],
+    ids=["network", "5xx", "404"],
+)
+def test_wait_error_carries_decision_id(
+    make_client: ClientFactory, server: MockServer, poll_reply: Reply
+) -> None:
+    server.reply(poll_reply)
+
+    with pytest.raises(ApiError) as info:
+        make_client().wait("dec_7")
+
+    assert info.value.decision_id == "dec_7"
+    assert "dec_7" in str(info.value)
 
 
 def test_large_body_is_gzipped(make_client: ClientFactory, server: MockServer) -> None:

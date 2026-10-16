@@ -6,7 +6,8 @@ import os
 import random
 import uuid
 from asyncio import sleep as async_sleep
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from time import monotonic, sleep
 from types import TracebackType
 from typing import Any, Self, cast
@@ -100,15 +101,18 @@ class RabbiX(_BaseClient):
         deadline = self._deadline()
         content, headers = _checkpoint_request(goal, result, decision_class, agent, metadata)
         response = self._send("POST", "/v1/checkpoints", content, headers)
-        return self._poll(response, deadline)
+        verdict = _parse_verdict(response)
+        with _polling(verdict.decision_id):
+            return self._poll(verdict, response, deadline)
 
     def wait(self, decision_id: str) -> Verdict:
         """Resume waiting for the final verdict of a pending decision."""
         deadline = self._deadline()
-        return self._poll(self._send("GET", _decision_path(decision_id)), deadline)
+        with _polling(decision_id):
+            response = self._send("GET", _decision_path(decision_id))
+            return self._poll(_parse_verdict(response), response, deadline)
 
-    def _poll(self, response: httpx.Response, deadline: float | None) -> Verdict:
-        verdict = _parse_verdict(response)
+    def _poll(self, verdict: Verdict, response: httpx.Response, deadline: float | None) -> Verdict:
         backoff = 1.0
         while verdict.status == "PENDING":
             sleep(_poll_delay(response, backoff, deadline, verdict.decision_id))
@@ -203,15 +207,20 @@ class AsyncRabbiX(_BaseClient):
         deadline = self._deadline()
         content, headers = _checkpoint_request(goal, result, decision_class, agent, metadata)
         response = await self._send("POST", "/v1/checkpoints", content, headers)
-        return await self._poll(response, deadline)
+        verdict = _parse_verdict(response)
+        with _polling(verdict.decision_id):
+            return await self._poll(verdict, response, deadline)
 
     async def wait(self, decision_id: str) -> Verdict:
         """Resume waiting for the final verdict of a pending decision."""
         deadline = self._deadline()
-        return await self._poll(await self._send("GET", _decision_path(decision_id)), deadline)
+        with _polling(decision_id):
+            response = await self._send("GET", _decision_path(decision_id))
+            return await self._poll(_parse_verdict(response), response, deadline)
 
-    async def _poll(self, response: httpx.Response, deadline: float | None) -> Verdict:
-        verdict = _parse_verdict(response)
+    async def _poll(
+        self, verdict: Verdict, response: httpx.Response, deadline: float | None
+    ) -> Verdict:
         backoff = 1.0
         while verdict.status == "PENDING":
             await async_sleep(_poll_delay(response, backoff, deadline, verdict.decision_id))
@@ -285,6 +294,16 @@ def _checkpoint_request(
         content = gzip.compress(content, mtime=0)
         headers["Content-Encoding"] = "gzip"
     return content, headers
+
+
+@contextmanager
+def _polling(decision_id: str) -> Generator[None]:
+    """Tag API errors raised while polling with the decision they concern."""
+    try:
+        yield
+    except ApiError as exc:
+        exc.decision_id = decision_id
+        raise
 
 
 def _decision_path(decision_id: str) -> str:

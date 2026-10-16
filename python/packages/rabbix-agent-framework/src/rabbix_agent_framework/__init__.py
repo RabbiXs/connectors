@@ -16,18 +16,19 @@ from agent_framework import (
 )
 from rabbix import AgentInfo, AsyncRabbiX, RabbiXError
 
-__all__ = ["RabbiXMiddleware", "run"]
+__all__ = ["RabbiXCheckpointMiddleware", "run_with_checkpoint"]
 
 FRAMEWORK = "agent-framework"
 
 
-class RabbiXMiddleware(AgentMiddleware):
+class RabbiXCheckpointMiddleware(AgentMiddleware):
     """Agent middleware that checkpoints every non-streaming run's response.
 
-    ``Agent(..., middleware=[RabbiXMiddleware(client)])``. On MODIFIED the run returns a
-    response holding the edited text; on anything but approval the run raises
-    ``rabbix.CheckpointRejected``. Streaming runs raise ``rabbix.RabbiXError`` before the
-    agent runs, because a streamed result reaches the caller before it can be checked.
+    ``Agent(..., middleware=[RabbiXCheckpointMiddleware(client)])``. On MODIFIED the run
+    returns a response holding the edited text; on anything but approval the run raises
+    ``rabbix.CheckpointRejected``. Streaming runs, and runs whose goal would be empty, raise
+    ``rabbix.RabbiXError`` before the agent runs (a streamed result reaches the caller before
+    it can be checked).
     """
 
     def __init__(
@@ -46,20 +47,16 @@ class RabbiXMiddleware(AgentMiddleware):
     ) -> None:
         if context.stream:
             raise RabbiXError("RabbiX checkpoint does not support streaming agent runs")
+        goal = _goal(context.agent, context.messages)
         await call_next()
         if not isinstance(context.result, AgentResponse):
             raise RabbiXError("agent run produced no response; nothing to checkpoint")
         context.result = await _checkpoint(
-            self._client,
-            context.agent,
-            context.messages,
-            context.result,
-            self._decision_class,
-            self._metadata,
+            self._client, context.agent, goal, context.result, self._decision_class, self._metadata
         )
 
 
-async def run(
+async def run_with_checkpoint(
     agent: SupportsAgentRun,
     messages: str | Message | Sequence[str | Message],
     *,
@@ -70,29 +67,35 @@ async def run(
 ) -> AgentResponse:
     """Run ``agent.run(messages, **run_kwargs)`` and checkpoint the response.
 
+    The goal is the agent's instructions and each message's text, joined with a blank line.
     Returns the response to act on (a response with the edited text on MODIFIED). Raises
-    ``rabbix.CheckpointRejected`` on anything but approval.
+    ``rabbix.CheckpointRejected`` on anything but approval, and ``rabbix.RabbiXError`` before
+    running the agent if the goal is empty.
     """
+    goal = _goal(agent, normalize_messages(messages))
     response: AgentResponse = await agent.run(messages, **run_kwargs)
-    return await _checkpoint(
-        client, agent, normalize_messages(messages), response, decision_class, metadata
-    )
+    return await _checkpoint(client, agent, goal, response, decision_class, metadata)
 
 
-async def _checkpoint(
-    client: AsyncRabbiX,
-    agent: SupportsAgentRun,
-    messages: Sequence[Message],
-    response: AgentResponse,
-    decision_class: str | None,
-    metadata: Mapping[str, str] | None,
-) -> AgentResponse:
+def _goal(agent: SupportsAgentRun, messages: Sequence[Message]) -> str:
     # Instructions live in default_options on the built-in Agent; custom agents may have none.
     options: Mapping[str, Any] = getattr(agent, "default_options", None) or {}
     instructions = options.get("instructions")
     parts = [instructions] if isinstance(instructions, str) else []
     goal = "\n\n".join(part for part in [*parts, *(m.text for m in messages)] if part)
+    if not goal:
+        raise RabbiXError("goal is empty: the agent has no instructions and the messages no text")
+    return goal
 
+
+async def _checkpoint(
+    client: AsyncRabbiX,
+    agent: SupportsAgentRun,
+    goal: str,
+    response: AgentResponse,
+    decision_class: str | None,
+    metadata: Mapping[str, str] | None,
+) -> AgentResponse:
     text = response.text
     approved = await client.checkpoint(
         goal,
