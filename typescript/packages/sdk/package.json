@@ -1,0 +1,31 @@
+{
+  "name": "@rabbix/sdk",
+  "version": "0.1.0",
+  "description": "RabbiX checkpoint client: submit an agent's goal and final result, get a verdict. Zero dependencies.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RabbiXs/connectors.git",
+    "directory": "typescript/packages/sdk"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

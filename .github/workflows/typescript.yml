@@ -1,0 +1,33 @@
+name: TypeScript
+
+on:
+  push:
+    paths: ["typescript/**", "openapi.yaml", ".github/workflows/typescript.yml"]
+  pull_request:
+    paths: ["typescript/**", "openapi.yaml", ".github/workflows/typescript.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v7
+      # Vite+ asks for an exact release here; the v1 tag no longer receives updates.
+      - uses: voidzero-dev/setup-vp@v1.21.2
+        with:
+          working-directory: typescript
+          node-version: ${{ matrix.node }}
+          cache: true
+      # Build first: the wrapper packages type-check against @rabbix/sdk's dist.
+      - run: vp run -r build
+      - run: vp check
+      - run: vp run -r test
