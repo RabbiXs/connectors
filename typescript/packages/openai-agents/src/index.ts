@@ -34,7 +34,8 @@ export async function runWithCheckpoint<TAgent extends Agent<any, any>, TContext
   // Resolves function-style instructions the same way the SDK does. Checked
   // before running so an agent whose run can never be approved is not started.
   const instructions = await agent.getSystemPrompt(new RunContext(runOptions?.context));
-  const task = typeof input === "string" ? input : JSON.stringify(input);
+  // An empty item list is an empty part (not "[]"), matching the Python wrapper.
+  const task = typeof input === "string" ? input : input.length ? JSON.stringify(input) : "";
   const goal = [instructions ?? "", task].filter((part) => part !== "").join("\n\n");
   if (!goal) throw new RabbiXError("Cannot checkpoint: the goal (instructions + input) is empty");
 

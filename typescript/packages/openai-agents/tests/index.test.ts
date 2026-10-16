@@ -57,12 +57,17 @@ test.each([
   expect(sentGoal()).toBe(goal);
 });
 
-test("empty instructions and empty input throw before anything runs or is sent", async () => {
-  const a = new Agent({ name: "a", instructions: "" });
-  await expect(runWithCheckpoint(a, "", { client })).rejects.toBeInstanceOf(RabbiXError);
-  expect(runMock).not.toHaveBeenCalled();
-  expect(checkpoint).not.toHaveBeenCalled();
-});
+test.each([[""], [[]]])(
+  "empty instructions and empty input %j throw before anything runs or is sent",
+  async (input) => {
+    const a = new Agent({ name: "a", instructions: "" });
+    await expect(runWithCheckpoint(a, input as never, { client })).rejects.toBeInstanceOf(
+      RabbiXError,
+    );
+    expect(runMock).not.toHaveBeenCalled();
+    expect(checkpoint).not.toHaveBeenCalled();
+  },
+);
 
 test("resolves function instructions with the run context", async () => {
   const dynamic = new Agent<{ shop: string }>({
