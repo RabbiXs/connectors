@@ -204,10 +204,18 @@ public sealed class RabbiXClient : IDisposable
         }
     }
 
-    private Task<(Verdict, TimeSpan?)> GetAsync(string decisionId, CancellationToken cancellationToken)
+    // Every API error while polling carries the decision id, so the host can resume instead of resubmitting.
+    private async Task<(Verdict, TimeSpan?)> GetAsync(string decisionId, CancellationToken cancellationToken)
     {
         var url = new Uri(_baseUrl, "v1/checkpoints/" + Uri.EscapeDataString(decisionId));
-        return SendAsync(() => new HttpRequestMessage(HttpMethod.Get, url), cancellationToken);
+        try
+        {
+            return await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, url), cancellationToken).ConfigureAwait(false);
+        }
+        catch (RabbiXApiException e) when (e.DecisionId is null)
+        {
+            throw new RabbiXApiException(e.StatusCode, e.Code, e.Message, e.InnerException, decisionId);
+        }
     }
 
     // Sends with retries on network errors, timeouts, 429 and 5xx. Returns the verdict of a 200/202 response.

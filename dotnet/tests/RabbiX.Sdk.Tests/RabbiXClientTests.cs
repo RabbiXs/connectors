@@ -215,6 +215,62 @@ public class RabbiXClientTests
     }
 
     [Test]
+    public async Task Polling_network_failure_carries_decision_id()
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.Accepted, """{"decisionId":"dec_1","status":"PENDING"}""");
+        handler.Fallback = () => throw new HttpRequestException("no route to host");
+        using var client = Fake.Client(handler);
+
+        var e = await Assert.ThrowsAsync<RabbiXApiException>(() => client.CheckpointAsync("g", "r"));
+
+        await Assert.That(e!.DecisionId).IsEqualTo("dec_1");
+        await Assert.That(e.StatusCode).IsNull();
+        await Assert.That(e.InnerException).IsTypeOf<HttpRequestException>();
+        await Assert.That(e.Message).Contains("dec_1");
+        await Assert.That(handler.Requests).Count().IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task Polling_server_errors_carry_decision_id()
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.Accepted, """{"decisionId":"dec_1","status":"PENDING"}""");
+        handler.Fallback = () => FakeHandler.Response(HttpStatusCode.InternalServerError, "{}");
+        using var client = Fake.Client(handler);
+
+        var e = await Assert.ThrowsAsync<RabbiXApiException>(() => client.CheckpointVerdictAsync(new CheckpointRequest { Goal = "g", Result = Json("\"r\"") }));
+
+        await Assert.That(e!.DecisionId).IsEqualTo("dec_1");
+        await Assert.That(e.StatusCode).IsEqualTo(500);
+        await Assert.That(e.Message).Contains("dec_1");
+        await Assert.That(handler.Requests).Count().IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task WaitAsync_not_found_carries_decision_id()
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.NotFound, """{"code":"not_found","message":"unknown decision"}""");
+        using var client = Fake.Client(handler);
+
+        var e = await Assert.ThrowsAsync<RabbiXApiException>(() => client.WaitAsync("dec_1"));
+
+        await Assert.That(e!.DecisionId).IsEqualTo("dec_1");
+        await Assert.That(e.StatusCode).IsEqualTo(404);
+        await Assert.That(e.Code).IsEqualTo("not_found");
+        await Assert.That(e.Message).Contains("unknown decision").And.Contains("dec_1");
+    }
+
+    [Test]
+    public async Task Submission_failure_has_no_decision_id()
+    {
+        var handler = new FakeHandler { Fallback = () => FakeHandler.Response(HttpStatusCode.InternalServerError, "{}") };
+        using var client = Fake.Client(handler);
+
+        var e = await Assert.ThrowsAsync<RabbiXApiException>(() => client.CheckpointAsync("g", "r"));
+
+        await Assert.That(e!.DecisionId).IsNull();
+    }
+
+    [Test]
     [Arguments(HttpStatusCode.BadRequest)]
     [Arguments(HttpStatusCode.Unauthorized)]
     [Arguments(HttpStatusCode.RequestEntityTooLarge)]

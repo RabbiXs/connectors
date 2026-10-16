@@ -31,6 +31,67 @@ public class RabbiXCheckpointAgentTests
             """{"goal":"You issue refunds under 50 EUR.\n\nRefund order 42","result":"Refunded 10 EUR","decisionClass":"refund","agent":{"name":"refunder","framework":"agent-framework"}}""");
     }
 
+    private static AIAgent AgentWith(FakeHandler handler, string? instructions, IReadOnlyDictionary<string, string>? metadata = null) =>
+        new ChatClientAgent(new FakeChatClient(["ok"]), instructions, name: "refunder")
+            .AsBuilder()
+            .UseRabbiXCheckpoint(Fake.Client(handler), metadata: metadata)
+            .Build();
+
+    private static string SentGoal(FakeHandler handler)
+    {
+        using var body = JsonDocument.Parse(handler.Requests.Single().BodyText);
+        return body.RootElement.GetProperty("goal").GetString()!;
+    }
+
+    [Test]
+    [Arguments("Be careful.", new[] { "Refund order 7" }, "Be careful.\n\nRefund order 7")]
+    [Arguments(null, new[] { "Refund order 7" }, "Refund order 7")]
+    [Arguments("Be careful.", new[] { "Hi", "Refund order 7" }, "Be careful.\n\nHi\n\nRefund order 7")]
+    [Arguments(" Be careful. ", new[] { "", "  Refund order 7\n" }, " Be careful. \n\n  Refund order 7\n")]
+    public async Task Goal_joins_non_empty_parts_verbatim(string? instructions, string[] messages, string expected)
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.OK, Fake.Verdict("APPROVED"));
+
+        await AgentWith(handler, instructions).RunAsync(messages.Select(m => new ChatMessage(ChatRole.User, m)));
+
+        await Assert.That(SentGoal(handler)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Goal_includes_run_level_instructions_after_agent_instructions()
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.OK, Fake.Verdict("APPROVED"));
+        var options = new ChatClientAgentRunOptions(new ChatOptions { Instructions = "Today only." });
+
+        await AgentWith(handler, "Be careful.").RunAsync("Refund order 7", options: options);
+
+        await Assert.That(SentGoal(handler)).IsEqualTo("Be careful.\n\nToday only.\n\nRefund order 7");
+    }
+
+    [Test]
+    public async Task Empty_goal_throws_before_any_request()
+    {
+        var handler = new FakeHandler();
+        var agent = AgentWith(handler, null);
+
+        var e = await Assert.ThrowsAsync<RabbiXException>(() => agent.RunAsync(new ChatMessage(ChatRole.User, "")));
+
+        await Assert.That(e).IsTypeOf<RabbiXException>();
+        await Assert.That(handler.Requests).IsEmpty();
+    }
+
+    [Test]
+    public async Task Metadata_is_sent()
+    {
+        var handler = new FakeHandler().Respond(HttpStatusCode.OK, Fake.Verdict("APPROVED"));
+        var agent = AgentWith(handler, null, new Dictionary<string, string> { ["ticket"] = "T-1" });
+
+        await agent.RunAsync("Refund order 7");
+
+        using var body = JsonDocument.Parse(handler.Requests.Single().BodyText);
+        await Assert.That(body.RootElement.GetProperty("metadata").GetRawText()).IsEqualTo("""{"ticket":"T-1"}""");
+    }
+
     [Test]
     public async Task Modified_replaces_response_text()
     {

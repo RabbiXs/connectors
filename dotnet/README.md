@@ -63,7 +63,9 @@ AIAgent agent = new ChatClientAgent(chatClient, instructions: "You issue refunds
 AgentResponse response = await agent.RunAsync("Refund order 42"); // throws unless approved
 ```
 
-The wrapper sends the agent's instructions plus the run's input messages as `goal`, the final response text as `result`, and `agent: { name, framework: "agent-framework" }`. On `MODIFIED` the returned response contains the edited text. Streaming runs are buffered and only yielded after approval. Background runs (continuation tokens) are rejected with `NotSupportedException`.
+`UseRabbiXCheckpoint(client, decisionClass, metadata)` (and the `RabbiXCheckpointAgent` constructor) take an optional `decisionClass` and `metadata` (`IReadOnlyDictionary<string, string>`), sent as-is.
+
+The wrapper sends as `goal` the non-empty parts below joined with `"\n\n"`, verbatim (no trimming): the agent's instructions, the run's `ChatOptions.Instructions`, then each input message's text in order. If that is empty it throws `RabbiXException` before the agent runs. It sends the final response text as `result`, and `agent: { name, framework: "agent-framework" }`. On `MODIFIED` the returned response contains the edited text. Streaming runs are buffered and only yielded after approval. Background runs (continuation tokens) are rejected with `NotSupportedException`.
 
 ## Errors
 
@@ -74,7 +76,7 @@ All exceptions derive from `RabbiXException`.
 | `CheckpointRejectedException` | `REJECTED`, `EXPIRED`, or any status this SDK does not know. `.Verdict` has the details. |
 | `CheckpointTimeoutException` | Still pending after `WaitTimeout`. Resume with `WaitAsync(e.DecisionId)`. |
 | `PayloadTooLargeException` | Body over 10 MB. Nothing was sent. |
-| `RabbiXApiException` | Non-retryable API error (`StatusCode`, `Code`), or retries exhausted (`StatusCode` is null for network failures). |
+| `RabbiXApiException` | Non-retryable API error (`StatusCode`, `Code`), or retries exhausted (`StatusCode` is null for network failures). If it failed while polling, `DecisionId` is set: the checkpoint exists, so resume with `WaitAsync(e.DecisionId)` instead of resubmitting. |
 
 To branch on the verdict yourself, use `CheckpointVerdictAsync`, which returns the `Verdict` instead of throwing for rejections:
 

@@ -35,9 +35,15 @@ public sealed class PayloadTooLargeException(long size, long limit)
 }
 
 /// <summary>The API returned a non-retryable error, or retries were exhausted.</summary>
-public sealed class RabbiXApiException(int? statusCode, string? code, string message, Exception? innerException = null)
-    : RabbiXException(message, innerException)
+public sealed class RabbiXApiException(int? statusCode, string? code, string message, Exception? innerException = null, string? decisionId = null)
+    : RabbiXException(decisionId is null ? message : $"{message} (decisionId: {decisionId}; resume with WaitAsync(\"{decisionId}\"))", innerException)
 {
+    /// <summary>
+    /// The decision being polled when the error happened, or null when the initial submission failed.
+    /// When set, the checkpoint exists: resume with <see cref="RabbiXClient.WaitAsync"/> instead of resubmitting.
+    /// </summary>
+    public string? DecisionId { get; } = decisionId;
+
     /// <summary>HTTP status code, or null when no response was received (network failure or request timeout).</summary>
     public int? StatusCode { get; } = statusCode;
 

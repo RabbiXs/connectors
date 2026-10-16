@@ -9,7 +9,9 @@ namespace RabbiX.Sdk.AgentFramework;
 /// Wraps an <see cref="AIAgent"/> so every run is checkpointed before its response is returned.
 /// </summary>
 /// <remarks>
-/// <para>The goal is the agent's instructions plus the run's input messages; the result is the final response text.</para>
+/// <para>The goal is the non-empty parts, joined with <c>"\n\n"</c> and not trimmed: the agent's instructions, the run's
+/// <c>ChatOptions.Instructions</c>, then each input message's text. An empty goal throws <see cref="RabbiXException"/>
+/// before the agent runs. The result is the final response text.</para>
 /// <para>Approved: the response is returned unchanged. Modified: the response is replaced by one assistant message
 /// with the edited text. Anything else throws (<see cref="CheckpointRejectedException"/>, <see cref="CheckpointTimeoutException"/>, ...).</para>
 /// <para>Streaming runs are buffered: nothing is yielded until the verdict allows it.</para>
@@ -21,13 +23,20 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
 
     private readonly RabbiXClient _client;
     private readonly string? _decisionClass;
+    private readonly IReadOnlyDictionary<string, string>? _metadata;
 
     /// <summary>Wraps <paramref name="innerAgent"/>.</summary>
-    public RabbiXCheckpointAgent(AIAgent innerAgent, RabbiXClient client, string? decisionClass = null)
+    /// <param name="innerAgent">The agent to checkpoint.</param>
+    /// <param name="client">The RabbiX client.</param>
+    /// <param name="decisionClass">Optional, sent as <c>decisionClass</c>.</param>
+    /// <param name="metadata">Optional string pairs, sent as <c>metadata</c>.</param>
+    public RabbiXCheckpointAgent(
+        AIAgent innerAgent, RabbiXClient client, string? decisionClass = null, IReadOnlyDictionary<string, string>? metadata = null)
         : base(innerAgent)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _decisionClass = decisionClass;
+        _metadata = metadata;
     }
 
     /// <inheritdoc />
@@ -38,8 +47,9 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
         CancellationToken cancellationToken = default)
     {
         List<ChatMessage> input = [.. messages];
+        var goal = Goal(input, options);
         var response = await InnerAgent.RunAsync(input, session, options, cancellationToken).ConfigureAwait(false);
-        return await CheckpointAsync(input, options, response, cancellationToken).ConfigureAwait(false);
+        return await CheckpointAsync(goal, response, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -50,6 +60,7 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         List<ChatMessage> input = [.. messages];
+        var goal = Goal(input, options);
         List<AgentResponseUpdate> updates = [];
         await foreach (var update in InnerAgent.RunStreamingAsync(input, session, options, cancellationToken).ConfigureAwait(false))
         {
@@ -57,7 +68,7 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
         }
 
         var response = updates.ToAgentResponse();
-        var approved = await CheckpointAsync(input, options, response, cancellationToken).ConfigureAwait(false);
+        var approved = await CheckpointAsync(goal, response, cancellationToken).ConfigureAwait(false);
         IEnumerable<AgentResponseUpdate> output = ReferenceEquals(approved, response) ? updates : approved.ToAgentResponseUpdates();
         foreach (var update in output)
         {
@@ -65,8 +76,7 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
         }
     }
 
-    private async Task<AgentResponse> CheckpointAsync(
-        List<ChatMessage> input, AgentRunOptions? options, AgentResponse response, CancellationToken cancellationToken)
+    private async Task<AgentResponse> CheckpointAsync(string goal, AgentResponse response, CancellationToken cancellationToken)
     {
         // A background run is not finished, so there is no final result to check.
 #pragma warning disable MEAI001 // ContinuationToken is experimental.
@@ -78,9 +88,10 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
 
         var request = new CheckpointRequest
         {
-            Goal = Goal(input, options),
+            Goal = goal,
             Result = JsonSerializer.SerializeToElement(response.Text, AIJsonUtilities.DefaultOptions),
             DecisionClass = _decisionClass,
+            Metadata = _metadata,
             Agent = new AgentInfo { Name = InnerAgent.Name, Framework = Framework },
         };
 
@@ -101,6 +112,7 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
         };
     }
 
+    // Cross-language contract: non-empty parts joined with "\n\n", verbatim (no trimming).
     private string Goal(List<ChatMessage> input, AgentRunOptions? options)
     {
         string?[] parts =
@@ -109,6 +121,9 @@ public sealed class RabbiXCheckpointAgent : DelegatingAIAgent
             (options as ChatClientAgentRunOptions)?.ChatOptions?.Instructions,
             .. input.Select(m => m.Text),
         ];
-        return string.Join("\n\n", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        var goal = string.Join("\n\n", parts.Where(p => !string.IsNullOrEmpty(p)));
+        return goal.Length > 0
+            ? goal
+            : throw new RabbiXException("Cannot checkpoint: the agent has no instructions and the input has no text, so the goal is empty.");
     }
 }
