@@ -133,7 +133,7 @@ components:
     CheckpointRequest:
       type: object
       required: [goal, result]
-      description: Properties not listed here are ignored by the Gateway, so SDKs can send fields ahead of it.
+      description: Properties not listed here are ignored by the Hub, so SDKs can send fields ahead of it.
       properties:
         goal:
           type: string
