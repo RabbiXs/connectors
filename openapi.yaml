@@ -28,7 +28,9 @@ paths:
         `202` means a human is reviewing; poll `GET /v1/checkpoints/{decisionId}`.
 
         Bodies larger than 8 KB SHOULD be sent with `Content-Encoding: gzip`.
-        The uncompressed body MUST NOT exceed 10 MB (10 485 760 bytes).
+        The uncompressed body MUST NOT exceed 10 MB (10 485 760 bytes); `goal` and
+        `result` have no limits of their own. JSON nesting deeper than 64 levels is
+        rejected with `400` (`validation_failed`).
       parameters:
         - name: Idempotency-Key
           in: header
@@ -59,7 +61,22 @@ paths:
               schema: { $ref: '#/components/schemas/Verdict' }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
+        '403':
+          description: Agent disabled or tenant suspended (code `agent_disabled` / `tenant_suspended`). Do not retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '413': { $ref: '#/components/responses/Error' }
+        '415':
+          description: Body is not `application/json`, or `Content-Encoding` is not gzip (code `unsupported_media_type`). Do not retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Idempotency-Key reused with a different body (code `idempotency_mismatch`). Do not retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429': { $ref: '#/components/responses/Retryable' }
         '5XX': { $ref: '#/components/responses/Retryable' }
   /v1/checkpoints/{decisionId}:
@@ -81,6 +98,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Verdict' }
         '401': { $ref: '#/components/responses/Error' }
+        '403':
+          description: Agent disabled or tenant suspended (code `agent_disabled` / `tenant_suspended`). Do not retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '429': { $ref: '#/components/responses/Retryable' }
         '5XX': { $ref: '#/components/responses/Retryable' }
@@ -111,7 +133,7 @@ components:
     CheckpointRequest:
       type: object
       required: [goal, result]
-      additionalProperties: false
+      description: Properties not listed here are ignored by the Gateway, so SDKs can send fields ahead of it.
       properties:
         goal:
           type: string
@@ -125,18 +147,21 @@ components:
             - type: array
         decisionClass:
           type: string
-          description: Category with shared rules and thresholds, e.g. `refund`, `price-change`.
+          maxLength: 64
+          pattern: '^[a-z0-9][a-z0-9-]*$'
+          description: Category with shared rules and thresholds, e.g. `refund`, `price-change`. Unknown classes are accepted.
         agent:
           $ref: '#/components/schemas/AgentInfo'
         metadata:
           type: object
-          additionalProperties: { type: string }
+          maxProperties: 50
+          propertyNames: { maxLength: 64, pattern: '^[A-Za-z0-9_.-]+$' }
+          additionalProperties: { type: string, maxLength: 512 }
           description: Free-form string pairs supplied by the integrator. The SDK adds nothing here.
     AgentInfo:
       type: object
-      additionalProperties: false
       properties:
-        name: { type: string }
+        name: { type: string, maxLength: 128 }
         framework:
           type: [string, 'null']
           enum: [openai-agents, agent-framework, claude-agent-sdk, null]
@@ -163,6 +188,27 @@ components:
     Error:
       type: object
       required: [code, message]
+      description: |
+        Clients decide by HTTP status; `code` adds detail. New codes may be added
+        at any time, so treat an unknown code by its status class.
+
+        | Status | code |
+        |---|---|
+        | 400 | `validation_failed` (schema, limits, malformed JSON, missing or invalid `Idempotency-Key`) |
+        | 401 | `invalid_api_key` (missing, malformed, unknown, revoked or expired) |
+        | 403 | `agent_disabled`, `tenant_suspended` |
+        | 404 | `decision_not_found` |
+        | 413 | `payload_too_large` |
+        | 415 | `unsupported_media_type` |
+        | 422 | `idempotency_mismatch` |
+        | 429 | `rate_limited`, `idempotency_in_flight` |
+        | 500 | `internal_error` |
+        | 503 | `service_unavailable` |
       properties:
         code: { type: string }
-        message: { type: string }
+        message:
+          type: string
+          description: Human-readable, English. Never contains submitted content.
+        traceId:
+          type: string
+          description: W3C trace id of the request, for support.
